@@ -1,0 +1,408 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>入荷スキャン | 保管場所照合</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html5-qrcode/2.3.8/html5-qrcode.min.js"></script>
+<style>
+  :root{
+    --bg: #F5F6F7;
+    --panel: #FFFFFF;
+    --ink: #1A1D21;
+    --ink-soft: #5B6168;
+    --line: #DDE1E4;
+    --steel: #1E5F74;
+    --steel-dark: #164A5C;
+    --ok: #2E7D32;
+    --ok-bg: #E8F5E9;
+    --warn: #F9A825;
+    --warn-bg: #FFF8E1;
+    --err: #C62828;
+    --err-bg: #FDECEA;
+    --mono: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "Hiragino Sans", "Yu Gothic", sans-serif;
+  }
+  *{box-sizing:border-box;}
+  html,body{
+    margin:0; padding:0; height:100%;
+    background:var(--bg); color:var(--ink);
+    font-family:var(--sans);
+    -webkit-tap-highlight-color: transparent;
+    overscroll-behavior:none;
+  }
+  #app{
+    display:flex; flex-direction:column;
+    height:100dvh; max-width:520px; margin:0 auto;
+    background:var(--panel);
+  }
+
+  /* ---- Header ---- */
+  header{
+    display:flex; align-items:center; justify-content:space-between;
+    padding:14px 16px; border-bottom:1px solid var(--line);
+    flex-shrink:0;
+  }
+  header h1{
+    font-size:17px; font-weight:700; margin:0; letter-spacing:.02em;
+  }
+  header h1 span{ color:var(--steel); }
+  #gearBtn{
+    width:38px; height:38px; border-radius:10px; border:1px solid var(--line);
+    background:var(--bg); display:flex; align-items:center; justify-content:center;
+    cursor:pointer; font-size:18px; color:var(--ink-soft);
+  }
+
+  /* ---- Camera area ---- */
+  #camWrap{
+    position:relative; flex-shrink:0;
+    aspect-ratio:1/1; background:#0C0F11; overflow:hidden;
+  }
+  #reader{ width:100%; height:100%; }
+  #reader video{ object-fit:cover !important; width:100% !important; height:100% !important; }
+
+  /* caliper-style reticle, nod to precision-machining measurement marks */
+  .reticle{
+    position:absolute; inset:12%; pointer-events:none;
+    border: 1px solid rgba(255,255,255,.55);
+  }
+  .reticle::before, .reticle::after,
+  .reticle i::before, .reticle i::after{
+    content:""; position:absolute; background:var(--steel);
+  }
+  .reticle::before{ top:-1px; left:-1px; width:22px; height:3px; }
+  .reticle::after{ top:-1px; left:-1px; width:3px; height:22px; }
+  .reticle i{ position:absolute; inset:0; }
+  .reticle i::before{ bottom:-1px; right:-1px; width:22px; height:3px; }
+  .reticle i::after{ bottom:-1px; right:-1px; width:3px; height:22px; }
+
+  #camStatus{
+    position:absolute; left:0; right:0; bottom:0;
+    padding:8px 12px; font-size:12px; font-family:var(--mono);
+    color:#fff; background:linear-gradient(transparent, rgba(0,0,0,.65));
+    text-align:center;
+  }
+
+  /* ---- Result panel ---- */
+  #resultWrap{ flex:1; overflow-y:auto; padding:16px; }
+
+  .card{
+    border-radius:14px; padding:18px; border:1px solid var(--line);
+    background:var(--bg); margin-bottom:14px;
+  }
+  .card.idle{ text-align:center; color:var(--ink-soft); font-size:14px; }
+  .card.ok{ background:var(--ok-bg); border-color:#BFE2C1; }
+  .card.err{ background:var(--err-bg); border-color:#F1BDB8; }
+  .card.warn{ background:var(--warn-bg); border-color:#F6E1A6; }
+
+  .card .tag{
+    display:inline-block; font-size:11px; font-weight:700; letter-spacing:.06em;
+    padding:3px 8px; border-radius:6px; margin-bottom:10px;
+  }
+  .card.ok .tag{ background:var(--ok); color:#fff; }
+  .card.err .tag{ background:var(--err); color:#fff; }
+  .card.warn .tag{ background:var(--warn); color:#3A2E00; }
+
+  .item-name{ font-size:15px; color:var(--ink-soft); margin:0 0 4px; }
+  .location{
+    font-size:30px; font-weight:800; margin:0 0 6px; line-height:1.2;
+    letter-spacing:.01em;
+  }
+  .code-readout{
+    font-family:var(--mono); font-size:12px; color:var(--ink-soft);
+    word-break:break-all;
+  }
+
+  /* ---- History ---- */
+  #history h2{
+    font-size:12px; text-transform:uppercase; letter-spacing:.08em;
+    color:var(--ink-soft); margin:4px 0 8px;
+  }
+  .hist-row{
+    display:flex; justify-content:space-between; gap:10px;
+    padding:10px 0; border-bottom:1px solid var(--line);
+    font-size:13px;
+  }
+  .hist-row .loc{ font-weight:700; color:var(--steel-dark); flex-shrink:0; }
+  .hist-row .name{ color:var(--ink-soft); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+
+  /* ---- Bottom controls ---- */
+  footer{
+    flex-shrink:0; padding:12px 16px calc(12px + env(safe-area-inset-bottom));
+    border-top:1px solid var(--line); display:flex; gap:10px;
+  }
+  button.action{
+    flex:1; border:none; border-radius:12px; padding:14px;
+    font-size:15px; font-weight:700; cursor:pointer; font-family:var(--sans);
+  }
+  #manualBtn{ background:var(--bg); color:var(--ink); border:1px solid var(--line); }
+  #scanAgainBtn{ background:var(--steel); color:#fff; }
+  #scanAgainBtn:active{ background:var(--steel-dark); }
+
+  /* ---- Modals ---- */
+  .modal-backdrop{
+    position:fixed; inset:0; background:rgba(10,13,15,.5);
+    display:none; align-items:flex-end; justify-content:center; z-index:50;
+  }
+  .modal-backdrop.show{ display:flex; }
+  .modal{
+    background:#fff; width:100%; max-width:520px; border-radius:16px 16px 0 0;
+    padding:20px; padding-bottom:calc(20px + env(safe-area-inset-bottom));
+  }
+  .modal h3{ margin:0 0 14px; font-size:16px; }
+  .modal label{ font-size:12px; color:var(--ink-soft); display:block; margin-bottom:6px; }
+  .modal input[type=text]{
+    width:100%; padding:12px; border-radius:10px; border:1px solid var(--line);
+    font-size:15px; font-family:var(--mono); margin-bottom:14px;
+  }
+  .modal .row{ display:flex; gap:10px; }
+  .modal button{
+    flex:1; padding:12px; border-radius:10px; border:none; font-weight:700; font-size:14px;
+  }
+  .modal .primary{ background:var(--steel); color:#fff; }
+  .modal .secondary{ background:var(--bg); color:var(--ink); border:1px solid var(--line); }
+  .hint{ font-size:12px; color:var(--ink-soft); margin-top:-6px; margin-bottom:14px; line-height:1.5; }
+</style>
+</head>
+<body>
+<div id="app">
+
+  <header>
+    <h1>入荷<span>スキャン</span></h1>
+    <button id="gearBtn" aria-label="設定">⚙</button>
+  </header>
+
+  <div id="camWrap">
+    <div id="reader"></div>
+    <div class="reticle"><i></i></div>
+    <div id="camStatus">カメラを準備しています…</div>
+  </div>
+
+  <div id="resultWrap">
+    <div id="resultCard" class="card idle">
+      バーコードまたはQRコードを枠内に合わせてください
+    </div>
+
+    <div id="history" style="display:none;">
+      <h2>直近のスキャン</h2>
+      <div id="historyList"></div>
+    </div>
+  </div>
+
+  <footer>
+    <button id="manualBtn" class="action">手入力</button>
+    <button id="scanAgainBtn" class="action" style="display:none;">再スキャン</button>
+  </footer>
+</div>
+
+<!-- 設定モーダル -->
+<div class="modal-backdrop" id="settingsModal">
+  <div class="modal">
+    <h3>接続設定</h3>
+    <label>Google Apps Script Web App URL</label>
+    <input type="text" id="gasUrlInput" placeholder="https://script.google.com/macros/s/.../exec">
+    <div class="hint">保管場所データベース(スプレッドシート)と連携するGASのURLを入力してください。設定はこの端末に保存されます。</div>
+    <div class="row">
+      <button class="secondary" id="settingsCancel">閉じる</button>
+      <button class="primary" id="settingsSave">保存</button>
+    </div>
+  </div>
+</div>
+
+<!-- 手入力モーダル -->
+<div class="modal-backdrop" id="manualModal">
+  <div class="modal">
+    <h3>バーコードを手入力</h3>
+    <label>コード番号</label>
+    <input type="text" id="manualCodeInput" placeholder="例: 4901234567890" inputmode="numeric">
+    <div class="row">
+      <button class="secondary" id="manualCancel">閉じる</button>
+      <button class="primary" id="manualSubmit">照合する</button>
+    </div>
+  </div>
+</div>
+
+<script>
+(function(){
+  const STORAGE_KEY = 'irika_scan_gas_url';
+  const els = {
+    reader: document.getElementById('reader'),
+    camStatus: document.getElementById('camStatus'),
+    resultCard: document.getElementById('resultCard'),
+    history: document.getElementById('history'),
+    historyList: document.getElementById('historyList'),
+    scanAgainBtn: document.getElementById('scanAgainBtn'),
+    manualBtn: document.getElementById('manualBtn'),
+    gearBtn: document.getElementById('gearBtn'),
+    settingsModal: document.getElementById('settingsModal'),
+    gasUrlInput: document.getElementById('gasUrlInput'),
+    settingsSave: document.getElementById('settingsSave'),
+    settingsCancel: document.getElementById('settingsCancel'),
+    manualModal: document.getElementById('manualModal'),
+    manualCodeInput: document.getElementById('manualCodeInput'),
+    manualSubmit: document.getElementById('manualSubmit'),
+    manualCancel: document.getElementById('manualCancel'),
+  };
+
+  let history = [];
+  let scanner = null;
+  let isPaused = false;
+
+  function getGasUrl(){
+    try { return localStorage.getItem(STORAGE_KEY) || ''; } catch(e){ return ''; }
+  }
+  function setGasUrl(v){
+    try { localStorage.setItem(STORAGE_KEY, v); } catch(e){}
+  }
+
+  // ---------- Lookup ----------
+  async function lookupCode(code){
+    const gasUrl = getGasUrl();
+    if(!gasUrl){
+      renderResult({state:'warn', message:'接続先が未設定です。右上の⚙から設定してください。', code});
+      return;
+    }
+    renderResult({state:'loading', code});
+    try{
+      const res = await fetch(gasUrl + '?code=' + encodeURIComponent(code));
+      const data = await res.json();
+      if(data && data.found){
+        renderResult({state:'ok', code, name:data.name, location:data.location});
+        pushHistory(data.location, data.name);
+      } else {
+        renderResult({state:'err', code, message:'このコードは登録されていません。品名台帳を確認してください。'});
+      }
+    } catch(err){
+      renderResult({state:'err', code, message:'通信に失敗しました。電波状況を確認し再度お試しください。'});
+    }
+  }
+
+  function renderResult({state, code, name, location, message}){
+    const card = els.resultCard;
+    card.className = 'card';
+    if(state === 'loading'){
+      card.classList.add('idle');
+      card.innerHTML = '照合中…';
+    } else if(state === 'ok'){
+      card.classList.add('ok');
+      card.innerHTML =
+        '<span class="tag">保管場所 確認済み</span>' +
+        '<p class="item-name">' + escapeHtml(name || '(品名未登録)') + '</p>' +
+        '<p class="location">' + escapeHtml(location) + '</p>' +
+        '<p class="code-readout">' + escapeHtml(code) + '</p>';
+    } else if(state === 'err'){
+      card.classList.add('err');
+      card.innerHTML =
+        '<span class="tag">未登録</span>' +
+        '<p class="location">' + escapeHtml(message) + '</p>' +
+        '<p class="code-readout">' + escapeHtml(code) + '</p>';
+    } else if(state === 'warn'){
+      card.classList.add('warn');
+      card.innerHTML =
+        '<span class="tag">設定が必要です</span>' +
+        '<p class="location">' + escapeHtml(message) + '</p>';
+    }
+    els.scanAgainBtn.style.display = 'block';
+    pauseScanning();
+  }
+
+  function pushHistory(location, name){
+    history.unshift({location, name: name || '(品名未登録)'});
+    history = history.slice(0, 5);
+    els.history.style.display = history.length ? 'block' : 'none';
+    els.historyList.innerHTML = history.map(h =>
+      '<div class="hist-row"><span class="loc">' + escapeHtml(h.location) +
+      '</span><span class="name">' + escapeHtml(h.name) + '</span></div>'
+    ).join('');
+  }
+
+  function escapeHtml(s){
+    return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  }
+
+  // ---------- Camera ----------
+  function pauseScanning(){
+    isPaused = true;
+    if(scanner){ try { scanner.pause(true); } catch(e){} }
+  }
+  function resumeScanning(){
+    isPaused = false;
+    els.scanAgainBtn.style.display = 'none';
+    els.resultCard.className = 'card idle';
+    els.resultCard.innerHTML = 'バーコードまたはQRコードを枠内に合わせてください';
+    if(scanner){
+      try { scanner.resume(); } catch(e){ startScanner(); }
+    } else {
+      startScanner();
+    }
+  }
+
+  function startScanner(){
+    if(typeof Html5Qrcode === 'undefined'){
+      els.camStatus.textContent = 'カメラライブラリの読み込みに失敗しました。手入力をご利用ください。';
+      return;
+    }
+    scanner = new Html5Qrcode('reader', {
+      formatsToSupport: [
+        Html5QrcodeSupportedFormats.QR_CODE,
+        Html5QrcodeSupportedFormats.CODE_128,
+        Html5QrcodeSupportedFormats.CODE_39,
+        Html5QrcodeSupportedFormats.EAN_13,
+        Html5QrcodeSupportedFormats.EAN_8,
+        Html5QrcodeSupportedFormats.UPC_A,
+        Html5QrcodeSupportedFormats.UPC_E,
+        Html5QrcodeSupportedFormats.ITF
+      ],
+      verbose:false
+    });
+    scanner.start(
+      { facingMode: 'environment' },
+      { fps: 10, qrbox: { width: 240, height: 240 } },
+      (decodedText) => { if(!isPaused) lookupCode(decodedText); },
+      () => {}
+    ).then(() => {
+      els.camStatus.textContent = '枠内にコードを合わせてください';
+    }).catch((err) => {
+      els.camStatus.textContent = 'カメラを起動できません。手入力をご利用ください。';
+    });
+  }
+
+  // ---------- Events ----------
+  els.scanAgainBtn.addEventListener('click', resumeScanning);
+
+  els.manualBtn.addEventListener('click', () => {
+    els.manualCodeInput.value = '';
+    els.manualModal.classList.add('show');
+    setTimeout(() => els.manualCodeInput.focus(), 50);
+  });
+  els.manualCancel.addEventListener('click', () => els.manualModal.classList.remove('show'));
+  els.manualSubmit.addEventListener('click', () => {
+    const v = els.manualCodeInput.value.trim();
+    els.manualModal.classList.remove('show');
+    if(v) lookupCode(v);
+  });
+
+  els.gearBtn.addEventListener('click', () => {
+    els.gasUrlInput.value = getGasUrl();
+    els.settingsModal.classList.add('show');
+  });
+  els.settingsCancel.addEventListener('click', () => els.settingsModal.classList.remove('show'));
+  els.settingsSave.addEventListener('click', () => {
+    setGasUrl(els.gasUrlInput.value.trim());
+    els.settingsModal.classList.remove('show');
+  });
+
+  // ---------- Init ----------
+  window.addEventListener('load', () => {
+    startScanner();
+    if(!getGasUrl()){
+      setTimeout(() => {
+        els.gasUrlInput.value = '';
+        els.settingsModal.classList.add('show');
+      }, 400);
+    }
+  });
+})();
+</script>
+</body>
+</html>
